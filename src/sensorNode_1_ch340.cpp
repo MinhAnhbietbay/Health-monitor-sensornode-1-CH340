@@ -5,10 +5,13 @@
 #include <DallasTemperature.h>
 #include <Wire.h>
 #include <MPU6050_tockn.h>
+#include "MAX30105.h"
+#include "spo2_algorithm.h"
 
-// ----
-#define ONE_WIRE_PIN 18     // Chân cảm biến DS18B20
-#define NODE_ID 1           // ID của node cảm biến
+// ---- Cấu hình phần cứng ----
+#define ONE_WIRE_PIN 18
+#define NODE_ID 1
+#define BUFFER_SIZE 100  // MAX30102
 
 // DS18B20
 OneWire oneWire(ONE_WIRE_PIN);
@@ -17,17 +20,20 @@ DallasTemperature sensors(&oneWire);
 // MPU6050
 MPU6050 mpu(Wire);
 
-// ----
+// MAX30102
+MAX30105 particleSensor;
+uint32_t redBuffer[BUFFER_SIZE];
+uint32_t irBuffer[BUFFER_SIZE];
+int32_t hr = 0, spo2 = 0;
+int8_t validHR = 0, validSpO2 = 0;
+
+// ---- WiFi + UDP ----
 const char* ssid = "DESKTOP-FTLL525 2479";
 const char* password = "9z7-6B47";
 const int udpPort = 8888;
-
 WiFiUDP udp;
 
-// ----
-// ----
-
-// Kết nối Wi-Fi
+// ---- WiFi ----
 void connectWiFi() {
   Serial.println("Đang kết nối WiFi...");
   WiFi.begin(ssid, password);
@@ -36,113 +42,108 @@ void connectWiFi() {
     Serial.print(".");
   }
   Serial.println("\nWiFi Connected!");
-  Serial.print("IP Address: ");
-  Serial.println(WiFi.localIP());
-  Serial.print("Subnet Mask: ");
-  Serial.println(WiFi.subnetMask());
+  Serial.print("IP Address: "); Serial.println(WiFi.localIP());
 }
 
-// Khởi tạo cảm biến nhiệt độ
-void initDS18B20() {
-  sensors.begin();
-  Serial.println("DS18B20 đã sẵn sàng!");
-}
+// ---- Init cảm biến ----
+void initDS18B20() { sensors.begin(); }
 
-// Khởi tạo cảm biến MPU6050
 void initMPU6050() {
-  Wire.begin(21, 22); // SDA = 21, SCL = 22
-  Serial.println("Đang khởi tạo MPU6050...");
+  Wire.begin(21, 22);
   mpu.begin();
   mpu.calcGyroOffsets(true);
-  Serial.println("MPU6050 đã sẵn sàng!");
 }
 
-// ----
-// ----
+void initMAX30102() {
+  Wire.begin(21, 22);
+  if (!particleSensor.begin(Wire, I2C_SPEED_STANDARD)) {
+    Serial.println("Khong tim thay MAX30102!");
+    while (1);
+  }
+  particleSensor.setup();
+  particleSensor.setPulseAmplitudeRed(0x0A);
+  particleSensor.setPulseAmplitudeIR(0x0A);
+  particleSensor.setPulseAmplitudeGreen(0);
+}
 
-// Đọc nhiệt độ từ DS18B20
+// ---- Đọc cảm biến ----
 float readTemperature() {
   sensors.requestTemperatures();
   return sensors.getTempCByIndex(0);
 }
 
-// Đọc dữ liệu từ MPU6050
 void readMPU6050(float &accX, float &accY, float &accZ,
                  float &gyroX, float &gyroY, float &gyroZ,
                  float &angleX, float &angleY, float &angleZ) {
   mpu.update();
-  accX = mpu.getAccX();
-  accY = mpu.getAccY();
-  accZ = mpu.getAccZ();
-  gyroX = mpu.getGyroX();
-  gyroY = mpu.getGyroY();
-  gyroZ = mpu.getGyroZ();
-  angleX = mpu.getAngleX();
-  angleY = mpu.getAngleY();
-  angleZ = mpu.getAngleZ();
+  accX = mpu.getAccX(); accY = mpu.getAccY(); accZ = mpu.getAccZ();
+  gyroX = mpu.getGyroX(); gyroY = mpu.getGyroY(); gyroZ = mpu.getGyroZ();
+  angleX = mpu.getAngleX(); angleY = mpu.getAngleY(); angleZ = mpu.getAngleZ();
 }
 
-// ----
-// ----
+void readMAX30102() {
+  // Đọc 100 mẫu MAX30102
+  for (byte i = 0; i < BUFFER_SIZE; i++) {
+    while (!particleSensor.check());
+    redBuffer[i] = particleSensor.getRed();
+    irBuffer[i] = particleSensor.getIR();
+  }
+  maxim_heart_rate_and_oxygen_saturation(irBuffer, BUFFER_SIZE,
+                                         redBuffer, &spo2, &validSpO2,
+                                         &hr, &validHR);
+}
 
-// Tính địa chỉ broadcast dựa trên IP hiện tại
+// ---- Gửi UDP ----
 IPAddress getBroadcastIP() {
   IPAddress broadcastIP;
-  for (int i = 0; i < 4; i++) {
+  for (int i = 0; i < 4; i++)
     broadcastIP[i] = WiFi.localIP()[i] | (~WiFi.subnetMask()[i]);
-  }
   return broadcastIP;
 }
 
-// Gửi dữ liệu qua UDP
 void sendUDPData(IPAddress broadcastIP, float tempC,
                  float accX, float accY, float accZ,
                  float gyroX, float gyroY, float gyroZ,
-                 float angleX, float angleY, float angleZ) {
+                 float angleX, float angleY, float angleZ,
+                 int hr, int spo2) {
   String data = String(NODE_ID) + "," +
                 String(tempC) + "," +
                 String(accX) + "," + String(accY) + "," + String(accZ) + "," +
                 String(gyroX) + "," + String(gyroY) + "," + String(gyroZ) + "," +
-                String(angleX) + "," + String(angleY) + "," + String(angleZ);
+                String(angleX) + "," + String(angleY) + "," + String(angleZ) + "," +
+                String(hr) + "," + String(spo2);
 
   udp.beginPacket(broadcastIP, udpPort);
   udp.print(data);
   udp.endPacket();
 
-  Serial.print("Đã gửi tới ");
-  Serial.print(broadcastIP);
-  Serial.println(":");
-  Serial.println("--------------------------------");
-  Serial.println(udpPort);
+  Serial.println("Đã gửi: " + data);
 }
 
-// ----
-// ----
+// ---- Setup ----
 void setup() {
   Serial.begin(115200);
   connectWiFi();
   udp.begin(udpPort);
   initDS18B20();
   initMPU6050();
+  initMAX30102();
 }
 
+// ---- Loop ----
 void loop() {
-  // Đọc cảm biếnggitgggg
   float tempC = readTemperature();
   float accX, accY, accZ, gyroX, gyroY, gyroZ, angleX, angleY, angleZ;
   readMPU6050(accX, accY, accZ, gyroX, gyroY, gyroZ, angleX, angleY, angleZ);
 
-  // In ra Serial
-  Serial.print("Node ID: "); Serial.println(NODE_ID);
-  Serial.print("Nhiệt độ: "); Serial.println(tempC);
-  Serial.print("Gia tốc: "); Serial.print(accX); Serial.print(", "); Serial.print(accY); Serial.print(", "); Serial.println(accZ);
-  Serial.print("Gyro: "); Serial.print(gyroX); Serial.print(", "); Serial.print(gyroY); Serial.print(", "); Serial.println(gyroZ);
-  Serial.print("Góc: "); Serial.print(angleX); Serial.print(", "); Serial.print(angleY); Serial.print(", "); Serial.println(angleZ);
+  readMAX30102();
 
-
-  // Gửi dữ liệu
   IPAddress broadcastIP = getBroadcastIP();
-  sendUDPData(broadcastIP, tempC, accX, accY, accZ, gyroX, gyroY, gyroZ, angleX, angleY, angleZ);
+  sendUDPData(broadcastIP, tempC,
+              accX, accY, accZ,
+              gyroX, gyroY, gyroZ,
+              angleX, angleY, angleZ,
+              hr, spo2);
 
   delay(3000);
 }
