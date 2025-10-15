@@ -24,8 +24,8 @@ MPU6050 mpu(Wire);
 MAX30105 particleSensor;
 uint32_t redBuffer[BUFFER_SIZE];
 uint32_t irBuffer[BUFFER_SIZE];
-int32_t hr = 0, spo2 = 0;
-int8_t validHR = 0, validSpO2 = 0;
+int32_t hr = 0;
+int8_t validHR = 0;
 
 // ---- WiFi + UDP ----
 const char* ssid = "DESKTOP-FTLL525 2479";
@@ -57,7 +57,7 @@ void initMPU6050() {
 void initMAX30102() {
   Wire.begin(21, 22);
   if (!particleSensor.begin(Wire, I2C_SPEED_STANDARD)) {
-    Serial.println("Khong tim thay MAX30102!");
+    Serial.println("Không tìm thấy MAX30102!");
     while (1);
   }
   particleSensor.setup();
@@ -88,6 +88,7 @@ void readMAX30102() {
     redBuffer[i] = particleSensor.getRed();
     irBuffer[i] = particleSensor.getIR();
   }
+  int32_t spo2; int8_t validSpO2;
   maxim_heart_rate_and_oxygen_saturation(irBuffer, BUFFER_SIZE,
                                          redBuffer, &spo2, &validSpO2,
                                          &hr, &validHR);
@@ -105,13 +106,13 @@ void sendUDPData(IPAddress broadcastIP, float tempC,
                  float accX, float accY, float accZ,
                  float gyroX, float gyroY, float gyroZ,
                  float angleX, float angleY, float angleZ,
-                 int hr, int spo2) {
+                 int hr) {
   String data = String(NODE_ID) + "," +
                 String(tempC) + "," +
                 String(accX) + "," + String(accY) + "," + String(accZ) + "," +
                 String(gyroX) + "," + String(gyroY) + "," + String(gyroZ) + "," +
                 String(angleX) + "," + String(angleY) + "," + String(angleZ) + "," +
-                String(hr) + "," + String(spo2);
+                String(hr);
 
   udp.beginPacket(broadcastIP, udpPort);
   udp.print(data);
@@ -143,7 +144,7 @@ void loop() {
               accX, accY, accZ,
               gyroX, gyroY, gyroZ,
               angleX, angleY, angleZ,
-              hr, spo2);
+              hr);
 
   delay(3000);
 }
