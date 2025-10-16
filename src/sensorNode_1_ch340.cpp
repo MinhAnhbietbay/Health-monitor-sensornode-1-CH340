@@ -76,9 +76,19 @@ void readMPU6050(float &accX, float &accY, float &accZ,
                  float &gyroX, float &gyroY, float &gyroZ,
                  float &angleX, float &angleY, float &angleZ) {
   mpu.update();
+
+  // Lấy giá trị gia tốc và gyro
   accX = mpu.getAccX(); accY = mpu.getAccY(); accZ = mpu.getAccZ();
   gyroX = mpu.getGyroX(); gyroY = mpu.getGyroY(); gyroZ = mpu.getGyroZ();
-  angleX = mpu.getAngleX(); angleY = mpu.getAngleY(); angleZ = mpu.getAngleZ();
+
+  // Lấy góc X, Y, Z
+  angleX = mpu.getAngleX(); 
+  angleY = mpu.getAngleY(); 
+  angleZ = mpu.getAngleZ();
+
+  // --- Chuẩn hóa góc Z về [-180, 180] tránh cộng dồn
+  if (angleZ > 180) angleZ -= 360;
+  else if (angleZ < -180) angleZ += 360;
 }
 
 void readMAX30102() {
